@@ -1,66 +1,128 @@
-UNAME_S = $(shell uname -s)
+# Which Swift to use.
+SWIFT:=swift
+# Where products will be built; this is the SPM default.
+SWIFT_BUILD_PATH:=./.build
+SWIFT_BUILD_CONFIGURATION=debug
+SWIFT_FLAGS=--build-path=${SWIFT_BUILD_PATH} --configuration=${SWIFT_BUILD_CONFIGURATION}
+# Force release configuration (for plugins)
+SWIFT_FLAGS_RELEASE=$(patsubst --configuration=%,--configuration=release,$(SWIFT_FLAGS))
 
-ifeq ($(UNAME_S),Linux)
-  CFLAGS = -Xcc -DTSI_OPENSSL_ALPN_SUPPORT=0 -Xlinker -lz
-else
-  CFLAGS = -Xcc -ISources/BoringSSL/include
-endif
+# protoc plugins.
+PROTOC_GEN_SWIFT=${SWIFT_BUILD_PATH}/release/protoc-gen-swift
+PROTOC_GEN_GRPC_SWIFT=${SWIFT_BUILD_PATH}/release/protoc-gen-grpc-swift
+
+SWIFT_BUILD:=${SWIFT} build ${SWIFT_FLAGS}
+SWIFT_BUILD_RELEASE:=${SWIFT} build ${SWIFT_FLAGS_RELEASE}
+SWIFT_TEST:=${SWIFT} test ${SWIFT_FLAGS}
+SWIFT_PACKAGE:=${SWIFT} package ${SWIFT_FLAGS}
+
+# Name of generated xcodeproj
+XCODEPROJ:=GRPC.xcodeproj
+
+### Package and plugin build targets ###########################################
 
 all:
-	swift build $(CFLAGS)
-	cp .build/debug/protoc-gen-swift .
-	cp .build/debug/protoc-gen-swiftgrpc .
+	${SWIFT_BUILD}
 
-plugin:
-	swift build $(CFLAGS) --product protoc-gen-swift --static-swift-stdlib -c release
-	swift build $(CFLAGS) --product protoc-gen-swiftgrpc --static-swift-stdlib -c release
-	cp .build/release/protoc-gen-swift .
-	cp .build/release/protoc-gen-swiftgrpc .
+.PHONY:
+plugins: ${PROTOC_GEN_SWIFT} ${PROTOC_GEN_GRPC_SWIFT}
+	cp $^ .
 
-project:
-	swift package $(CFLAGS) generate-xcodeproj --output SwiftGRPC.xcodeproj
-	@-ruby fix-project-settings.rb SwiftGRPC.xcodeproj || echo "Consider running 'sudo gem install xcodeproj' to automatically set correct indentation settings for the generated project."
+${PROTOC_GEN_SWIFT}:
+	${SWIFT_BUILD_RELEASE} --product protoc-gen-swift
 
-project-carthage:
-	swift package generate-xcodeproj --output SwiftGRPC-Carthage.xcodeproj
-	@sed -i '' -e "s|$(PWD)|..|g" SwiftGRPC-Carthage.xcodeproj/project.pbxproj
-	@sed -i '' -e "s|$(PWD)|../../..|g" SwiftGRPC-Carthage.xcodeproj/GeneratedModuleMap/BoringSSL/module.modulemap
-	@ruby fix-project-settings.rb SwiftGRPC-Carthage.xcodeproj || echo "xcodeproj ('sudo gem install xcodeproj') is required in order to generate the Carthage-compatible project!"
-	@ruby patch-carthage-project.rb SwiftGRPC-Carthage.xcodeproj || echo "xcodeproj ('sudo gem install xcodeproj') is required in order to generate the Carthage-compatible project!"
+${PROTOC_GEN_GRPC_SWIFT}: Sources/protoc-gen-grpc-swift/*.swift
+	${SWIFT_BUILD_RELEASE} --product protoc-gen-grpc-swift
 
-test: all
-	swift test $(CFLAGS)
+interop-test-runner:
+	${SWIFT_BUILD} --product GRPCInteroperabilityTests
 
-test-echo: all
-	cp .build/debug/Echo .
-	./Echo serve & /bin/echo $$! > echo.pid
-	./Echo get | tee test.out
-	./Echo expand | tee -a test.out
-	./Echo collect | tee -a test.out
-	./Echo update | tee -a test.out
-	kill -9 `cat echo.pid`
-	diff -u test.out Sources/Examples/Echo/test.gold
+interop-backoff-test-runner:
+	${SWIFT_BUILD} --product GRPCConnectionBackoffInteropTest
 
-test-plugin:
-	swift build $(CFLAGS) --product protoc-gen-swiftgrpc
-	protoc Sources/Examples/Echo/echo.proto --proto_path=Sources/Examples/Echo --plugin=.build/debug/protoc-gen-swift --plugin=.build/debug/protoc-gen-swiftgrpc --swiftgrpc_out=/tmp --swiftgrpc_opt=TestStubs=true
-	diff -u /tmp/echo.grpc.swift Sources/Examples/Echo/Generated/echo.grpc.swift
+### Xcodeproj and LinuxMain
 
-xcodebuild: project
-		xcodebuild -project SwiftGRPC.xcodeproj -configuration "Debug" -parallelizeTargets -target SwiftGRPC -target Echo -target Simple -target protoc-gen-swiftgrpc build
+.PHONY:
+project: ${XCODEPROJ}
 
-build-carthage:
-	carthage build -project SwiftGRPC-Carthage.xcodeproj --no-skip-current
+${XCODEPROJ}:
+	${SWIFT_PACKAGE} generate-xcodeproj --output $@
+	@-ruby scripts/fix-project-settings.rb GRPC.xcodeproj || \
+		echo "Consider running 'sudo gem install xcodeproj' to automatically set correct indentation settings for the generated project."
 
-build-carthage-debug:
-	carthage build -project SwiftGRPC-Carthage.xcodeproj --no-skip-current --configuration Debug --platform iOS, macOS
+# Generates LinuxMain.swift, only on macOS.
+generate-linuxmain:
+	${SWIFT_TEST} --generate-linuxmain
 
+### Protobuf Generation ########################################################
+
+%.pb.swift: %.proto ${PROTOC_GEN_SWIFT}
+	protoc $< \
+		--proto_path=$(dir $<) \
+		--plugin=${PROTOC_GEN_SWIFT} \
+		--swift_opt=Visibility=Public \
+		--swift_out=$(dir $<)
+
+%.grpc.swift: %.proto ${PROTOC_GEN_GRPC_SWIFT}
+	protoc $< \
+		--proto_path=$(dir $<) \
+		--plugin=${PROTOC_GEN_GRPC_SWIFT} \
+		--grpc-swift_opt=Visibility=Public \
+		--grpc-swift_out=$(dir $<)
+
+ECHO_PROTO=Sources/Examples/Echo/Model/echo.proto
+ECHO_PB=$(ECHO_PROTO:.proto=.pb.swift)
+ECHO_GRPC=$(ECHO_PROTO:.proto=.grpc.swift)
+
+# Generates protobufs and gRPC client and server for the Echo example
+.PHONY:
+generate-echo: ${ECHO_PB} ${ECHO_GRPC}
+
+HELLOWORLD_PROTO=Sources/Examples/HelloWorld/Model/helloworld.proto
+HELLOWORLD_PB=$(HELLOWORLD_PROTO:.proto=.pb.swift)
+HELLOWORLD_GRPC=$(HELLOWORLD_PROTO:.proto=.grpc.swift)
+
+# Generates protobufs and gRPC client and server for the Hello World example
+.PHONY:
+generate-helloworld: ${HELLOWORLD_PB} ${HELLOWORLD_GRPC}
+
+ROUTE_GUIDE_PROTO=Sources/Examples/RouteGuide/Model/route_guide.proto
+ROUTE_GUIDE_PB=$(ROUTE_GUIDE_PROTO:.proto=.pb.swift)
+ROUTE_GUIDE_GRPC=$(ROUTE_GUIDE_PROTO:.proto=.grpc.swift)
+
+# Generates protobufs and gRPC client and server for the Route Guide example
+.PHONY:
+generate-route-guide: ${ROUTE_GUIDE_PB} ${ROUTE_GUIDE_GRPC}
+
+### Testing ####################################################################
+
+# Normal test suite.
+.PHONY:
+test:
+	${SWIFT_TEST}
+
+# Checks that linuxmain has been updated: requires macOS.
+.PHONY:
+test-generate-linuxmain: generate-linuxmain
+	@git diff --exit-code Tests/LinuxMain.swift Tests/*/XCTestManifests.swift > /dev/null || \
+		{ echo "Generated tests are out-of-date; run 'swift test --generate-linuxmain' to update them!"; exit 1; }
+
+# Generates code for the Echo server and client and tests them against 'golden' data.
+.PHONY:
+test-plugin: ${ECHO_PROTO} ${PROTOC_GEN_GRPC_SWIFT} ${ECHO_GRPC}
+	protoc $< \
+		--proto_path=$(dir $<) \
+		--plugin=${PROTOC_GEN_GRPC_SWIFT} \
+		--grpc-swift_opt=Visibility=Public \
+		--grpc-swift_out=/tmp
+	diff -u /tmp/echo.grpc.swift ${ECHO_GRPC}
+
+### Misc. ######################################################################
+
+.PHONY:
 clean:
 	-rm -rf Packages
-	-rm -rf .build build
-	-rm -rf SwiftGRPC.xcodeproj
-	-rm -rf Package.pins Package.resolved
-	-rm -rf protoc-gen-swift protoc-gen-swiftgrpc
-	-cd Examples/Google/Datastore && make clean
+	-rm -rf ${SWIFT_BUILD_PATH}
+	-rm -rf ${XCODEPROJ}
+	-rm -f Package.resolved
 	-cd Examples/Google/NaturalLanguage && make clean
-	-cd Examples/Google/Spanner && make clean

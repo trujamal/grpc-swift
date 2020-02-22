@@ -1,5 +1,5 @@
 /*
- * Copyright 2017, gRPC Authors All rights reserved.
+ * Copyright 2019, gRPC Authors All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,56 +15,113 @@
  */
 import Dispatch
 import Foundation
-import SwiftGRPC
+import GRPC
 import OAuth2
+import NIO
+import NIOHTTP1
+import NIOHPACK
+import NIOSSL
 
-let scopes = ["https://www.googleapis.com/auth/cloud-language"]
+/// Create a client and return a future to provide its value.
+func makeServiceClient(
+  host: String,
+  port: Int,
+  eventLoopGroup: MultiThreadedEventLoopGroup
+) -> Google_Cloud_Language_V1_LanguageServiceServiceClient {
+  let configuration = ClientConnection.Configuration(
+    target: .hostAndPort(host, port),
+    eventLoopGroup: eventLoopGroup,
+    tls: .init()
+  )
 
-if let provider = DefaultTokenProvider(scopes: scopes) {
-  let sem = DispatchSemaphore(value: 0)
-  try provider.withToken { (token, error) -> Void in
-    if let token = token {
-      gRPC.initialize()
+  let connection = ClientConnection(configuration: configuration)
+  return Google_Cloud_Language_V1_LanguageServiceServiceClient(connection: connection)
+}
 
-      guard let authToken = token.AccessToken else {
-        print("ERROR: No OAuth token is available.")
-        exit(-1)
-      }
+enum AuthError: Error {
+  case noTokenProvider
+  case tokenProviderFailed
+}
 
-      let service = Google_Cloud_Language_V1_LanguageServiceServiceClient(address: "language.googleapis.com")
-
-      service.metadata = try! Metadata(["authorization": "Bearer " + authToken])
-
-      var request = Google_Cloud_Language_V1_AnnotateTextRequest()
-
-      var document = Google_Cloud_Language_V1_Document()
-      document.type = .plainText
-      document.content = "The Caterpillar and Alice looked at each other for some time in silence: at last the Caterpillar took the hookah out of its mouth, and addressed her in a languid, sleepy voice. `Who are you?' said the Caterpillar."
-      request.document = document
-
-      var features = Google_Cloud_Language_V1_AnnotateTextRequest.Features()
-      features.extractSyntax = true
-      features.extractEntities = true
-      features.extractDocumentSentiment = true
-      features.extractEntitySentiment = true
-      features.classifyText = true
-      request.features = features
-
-      print("\(request)")
-
-      do {
-        let result = try service.annotateText(request)
-        print("\(result)")
-      } catch {
-        print("ERROR: \(error)")
-      }
+/// Get an auth token and return a future to provide its value.
+func getAuthToken(
+  scopes: [String],
+  eventLoop: EventLoop
+) -> EventLoopFuture<String> {
+    let promise = eventLoop.makePromise(of: String.self)
+    guard let provider = DefaultTokenProvider(scopes: scopes) else {
+      promise.fail(AuthError.noTokenProvider)
+      return promise.futureResult
     }
-    if let error = error {
-      print("ERROR \(error)")
+    do {
+      try provider.withToken { (token, error) in
+        if let token = token,
+          let accessToken = token.AccessToken {
+          promise.succeed(accessToken)
+        } else if let error = error {
+          promise.fail(error)
+        } else {
+          promise.fail(AuthError.tokenProviderFailed)
+        }
+      }
+    } catch {
+      promise.fail(error)
     }
-    sem.signal()
+    return promise.futureResult
+}
+
+/// Main program. Make a sample API request.
+do {
+  let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+
+  // Get an auth token.
+  let scopes = ["https://www.googleapis.com/auth/cloud-language"]
+  let authToken = try getAuthToken(
+    scopes: scopes,
+    eventLoop: eventLoopGroup.next()
+  ).wait()
+
+  // Create a service client.
+  let service = makeServiceClient(
+    host: "language.googleapis.com",
+    port: 443,
+    eventLoopGroup: eventLoopGroup
+  )
+
+  // Use CallOptions to send the auth token (necessary) and set a custom timeout (optional).
+  let headers: HPACKHeaders = ["authorization": "Bearer \(authToken)"]
+  let callOptions = CallOptions(customMetadata: headers, timeout: .seconds(rounding: 30))
+  print("CALL OPTIONS\n\(callOptions)\n")
+
+  // Construct the API request.
+  let request = Google_Cloud_Language_V1_AnnotateTextRequest.with {
+    $0.document = .with {
+      $0.type = .plainText
+      $0.content = "The Caterpillar and Alice looked at each other for some time in silence: at last the Caterpillar took the hookah out of its mouth, and addressed her in a languid, sleepy voice. `Who are you?' said the Caterpillar."
+    }
+
+    $0.features = .with {
+      $0.extractSyntax = true
+      $0.extractEntities = true
+      $0.extractDocumentSentiment = true
+      $0.extractEntitySentiment = true
+      $0.classifyText = true
+    }
   }
-  _ = sem.wait()
-} else {
-  print("Unable to create default token provider.")
+  print("REQUEST MESSAGE\n\(request)")
+
+  // Create/start the API call.
+  let call = service.annotateText(request, callOptions: callOptions)
+  call.response.whenSuccess { response in
+    print("CALL SUCCEEDED WITH RESPONSE\n\(response)")
+  }
+  call.response.whenFailure { error in
+    print("CALL FAILED WITH ERROR\n\(error)")
+  }
+
+  // wait() on the status to stop the program from exiting.
+  let status = try call.status.wait()
+  print("CALL STATUS\n\(status)")
+} catch {
+  print("EXAMPLE FAILED WITH ERROR\n\(error)")
 }
