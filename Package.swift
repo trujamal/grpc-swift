@@ -3,9 +3,23 @@
 import PackageDescription
 import Foundation
 
-var packageDependencies: [Package.Dependency] = [
-  .package(url: "https://github.com/apple/swift-protobuf.git", .upToNextMajor(from: "1.5.0")),
-  .package(url: "https://github.com/kylef/Commander.git", .upToNextMinor(from: "0.8.0"))
+var packageDependencies: [Package.Dependency] = [  
+    .package(url: "https://github.com/kylef/Commander.git", .upToNextMinor(from: "0.8.0")),
+     // GRPC dependencies:
+    // Main SwiftNIO package
+    .package(url: "https://github.com/apple/swift-nio.git", from: "2.13.0"),
+    // HTTP2 via SwiftNIO
+    .package(url: "https://github.com/apple/swift-nio-http2.git", from: "1.8.0"),
+    // TLS via SwiftNIO
+    .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.6.0"),
+    // Support for Network.framework where possible.
+    .package(url: "https://github.com/apple/swift-nio-transport-services.git", from: "1.3.0"),
+
+    // Official SwiftProtobuf library, for [de]serializing data to send on the wire.
+    .package(url: "https://github.com/apple/swift-protobuf.git", from: "1.8.0"),
+
+    // Logging API.
+    .package(url: "https://github.com/apple/swift-log", from: "1.0.0"),
 ]
 
 var cGRPCDependencies: [Target.Dependency] = []
