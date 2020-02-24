@@ -1,10 +1,10 @@
 # Echo, a gRPC Sample App
 
-This directory contains a simple echo server that demonstrates all four gRPC API
-styles (Unary, Server Streaming, Client Streaming, and Bidirectional Streaming)
-using the gRPC Swift.
+This directory contains a simple echo server and client
+that demonstrates all four gRPC API styles (Unary, Server
+Streaming, Client Streaming, and Bidirectional Streaming).
 
-There are three subdirectories:
-* `Model` containing the service and model definitions and generated code,
-* `Implementation` containing the server implementation of the generated model,
-* `Runtime` containing a CLI for the server and client.
+The [Xcode](Xcode) directory contains a Mac app and
+[PackageManager](PackageManager) contains a command-line tool
+that can be built with the Swift Package Manager. Both contain
+a Swift client and server.
