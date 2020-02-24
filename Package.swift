@@ -17,7 +17,17 @@
 import PackageDescription
 import Foundation
 
-var packageDependencies: [Package.Dependency] = [
+let package = Package(
+  name: "GRPC",
+  platforms: [
+    // We can't use `.watchOS(.v6)` since it isn't available with `swift-tools-version:5.0`.
+    .macOS(.v10_12), .iOS(.v10), .tvOS(.v10), .watchOS("6.0")
+  ],
+  products: [
+    .library(name: "GRPC", targets: ["GRPC"]),
+    .executable(name: "protoc-gen-grpc-swift", targets: ["protoc-gen-grpc-swift"]),
+  ],
+  dependencies: [
     // GRPC dependencies:
     // Main SwiftNIO package
     .package(url: "https://github.com/apple/swift-nio.git", from: "2.13.0"),
@@ -33,34 +43,8 @@ var packageDependencies: [Package.Dependency] = [
 
     // Logging API.
     .package(url: "https://github.com/apple/swift-log", from: "1.0.0"),
-
-    .package(url: "https://github.com/kylef/Commander.git", .upToNextMinor(from: "0.8.0")),
-] 
-
-let package = Package(
-    name: "SwiftGRPC",
-  platforms: [
-    // We can't use `.watchOS(.v6)` since it isn't available with `swift-tools-version:5.0`.
-    .macOS(.v10_12), .iOS(.v10), .tvOS(.v10), .watchOS("6.0")
   ],
-  products: [
-    .library(name: "GRPC", targets: ["GRPC"]),
-    .executable(name: "protoc-gen-grpc-swift", targets: ["protoc-gen-grpc-swift"]),
-  ],
-  dependencies: packageDependencies,
   targets: [
-    .target(name: "SwiftGRPC",
-                dependencies: ["CgRPC", "SwiftProtobuf"]),
-
-    .target(name: "CgRPC",
-                dependencies: cGRPCDependencies,
-                cSettings: [
-                    .headerSearchPath("../BoringSSL/include", .when(platforms: [.iOS, .macOS, .tvOS, .watchOS])),
-                    .unsafeFlags(["-Wno-module-import-in-extern-c"])],
-                linkerSettings: [.linkedLibrary("z")]),
-
-    target(name: "BoringSSL"),
-    .testTarget(name: "SwiftGRPCTests", dependencies: ["SwiftGRPC"]),
     // The main GRPC module.
     .target(
       name: "GRPC",
