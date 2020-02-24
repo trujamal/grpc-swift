@@ -43,6 +43,9 @@ let package = Package(
 
     // Logging API.
     .package(url: "https://github.com/apple/swift-log", from: "1.0.0"),
+
+    // Command line argument parser for our auxiliary command line tools.
+    .package(url: "https://github.com/kylef/Commander.git", .upToNextMinor(from: "0.9.1"))
   ],
   targets: [
     // The main GRPC module.
@@ -70,7 +73,6 @@ let package = Package(
         "GRPCInteroperabilityTestsImplementation"
       ]
     ),
-
     .target(
       name: "CGRPCZlib",
       linkerSettings: [
@@ -246,5 +248,26 @@ let package = Package(
       ],
       path: "Sources/Examples/RouteGuide/Server"
     ),
+
+    // Adding New Clients
+    .target(name: "SwiftGRPC",
+      dependencies: ["CgRPC", "SwiftProtobuf"]
+    ),
+    .target(name: "CgRPC",
+      dependencies: ["BoringSSL"],
+      cSettings: [
+        .headerSearchPath("../BoringSSL/include"),
+        .unsafeFlags(["-Wno-module-import-in-extern-c"])
+      ],
+      linkerSettings: [.linkedLibrary("z")]
+    ),
+    .target(name: "RootsEncoder"),
+    .target(name: "protoc-gen-swiftgrpc",
+      dependencies: [
+        "SwiftProtobuf",
+        "SwiftProtobufPluginLibrary",
+        "protoc-gen-swift"]
+    ),
+    .target(name: "BoringSSL"),
   ]
 )
