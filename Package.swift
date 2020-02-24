@@ -45,7 +45,10 @@ let package = Package(
     .package(url: "https://github.com/apple/swift-log", from: "1.0.0"),
 
     // Command line argument parser for our auxiliary command line tools.
-    .package(url: "https://github.com/kylef/Commander.git", .upToNextMinor(from: "0.9.1"))
+    .package(url: "https://github.com/kylef/Commander.git", .upToNextMinor(from: "0.9.1")),
+    
+    // Swiftgrpc Dependecy
+    .package(url: "https://github.com/grpc/grpc-swift.git", from: "0.10.0"),
   ],
   targets: [
     // The main GRPC module.
